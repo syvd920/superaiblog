@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
-type Company = {
+type CompanyRow = {
   id: number;
   company_name: string;
+  login_id: string | null;
   publish_limit: number;
   publish_used: number;
   image_limit: number;
@@ -14,81 +16,213 @@ type Company = {
   is_active: boolean;
 };
 
+function phoneToEmail(phone: string) {
+  const normalized = phone.replace(/[^0-9]/g, '');
+  return `${normalized}@admin.local`;
+}
+
 export default function AdminUsersPage() {
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [form, setForm] = useState({
-    company_name: '',
-    publish_limit: '100',
-    image_limit: '300',
-    expires_at: ''
-  });
-  const [message, setMessage] = useState('');
+  const router = useRouter();
+
+  const [checking, setChecking] = useState(true);
+  const [companies, setCompanies] = useState<CompanyRow[]>([]);
+
+  const [companyName, setCompanyName] = useState('');
+  const [loginId, setLoginId] = useState('');
+  const [password, setPassword] = useState('');
+  const [publishLimit, setPublishLimit] = useState(30);
+  const [imageLimit, setImageLimit] = useState(100);
+  const [expiresAt, setExpiresAt] = useState('2026-12-31');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const checkAdmin = async () => {
+      const { data: userData } = await supabase.auth.getUser();
+      const email = userData.user?.email || '';
+      const admins = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
+
+      if (!userData.user || !admins.includes(email)) {
+        router.push('/login');
+        return;
+      }
+
+      setChecking(false);
+      loadCompanies();
+    };
+
+    checkAdmin();
+  }, [router]);
 
   const loadCompanies = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('company_profiles')
-      .select('id,company_name,publish_limit,publish_used,image_limit,image_used,expires_at,is_active')
+      .select(
+        'id,company_name,login_id,publish_limit,publish_used,image_limit,image_used,expires_at,is_active'
+      )
       .order('id', { ascending: false });
 
-    setCompanies((data || []) as Company[]);
+    if (!error && data) {
+      setCompanies(data as CompanyRow[]);
+    }
   };
 
-  useEffect(() => { loadCompanies(); }, []);
+  const createCompany = async () => {
+    if (!companyName || !loginId || !password || !expiresAt) {
+      alert('모든 값을 입력하세요.');
+      return;
+    }
 
-  const handleCreate = async () => {
-    setMessage('관리자 API 붙이기 전 목업입니다. SQL로 계정/프로필 생성 후 이 화면은 목록 확인 및 UI 용도로 먼저 사용하세요.');
+    try {
+      setSaving(true);
+
+      const res = await fetch('/api/admin/companies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_name: companyName,
+          login_id: loginId,
+          email: phoneToEmail(loginId),
+          password,
+          publish_limit: Number(publishLimit),
+          image_limit: Number(imageLimit),
+          expires_at: expiresAt,
+        }),
+      });
+
+      const json = await res.json();
+
+      if (!res.ok) {
+        alert(json.error || '업체 생성 실패');
+        return;
+      }
+
+      alert('업체 계정이 생성되었습니다.');
+      setCompanyName('');
+      setLoginId('');
+      setPassword('');
+      setPublishLimit(30);
+      setImageLimit(100);
+      setExpiresAt('2026-12-31');
+      loadCompanies();
+    } finally {
+      setSaving(false);
+    }
   };
+
+  const toggleActive = async (row: CompanyRow) => {
+    const { error } = await supabase
+      .from('company_profiles')
+      .update({ is_active: !row.is_active })
+      .eq('id', row.id);
+
+    if (error) {
+      alert('상태 변경 실패');
+      return;
+    }
+
+    loadCompanies();
+  };
+
+  if (checking) {
+    return <main className="page-shell" style={{ padding: 40 }}>관리자 확인 중...</main>;
+  }
 
   return (
     <main className="page-shell">
-      <header className="topbar">
-        <div className="topbar-inner">
-          <div className="brand">관리자 페이지</div>
+      <div className="admin-wrap">
+        <div className="card admin-form-card">
+          <h1>업체 계정 생성</h1>
+          <p>전화번호를 아이디처럼 부여하고, 내부적으로는 이메일 형태로 Auth 계정을 생성합니다.</p>
+
+          <div className="field">
+            <label>업체명</label>
+            <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} />
+          </div>
+
+          <div className="field">
+            <label>전화번호 아이디</label>
+            <input
+              value={loginId}
+              onChange={(e) => setLoginId(e.target.value)}
+              placeholder="01012345678"
+            />
+          </div>
+
+          <div className="field">
+            <label>비밀번호</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+
+          <div className="field-row">
+            <div className="field">
+              <label>발행 한도</label>
+              <input
+                type="number"
+                value={publishLimit}
+                onChange={(e) => setPublishLimit(Number(e.target.value))}
+              />
+            </div>
+            <div className="field">
+              <label>이미지 생성 한도</label>
+              <input
+                type="number"
+                value={imageLimit}
+                onChange={(e) => setImageLimit(Number(e.target.value))}
+              />
+            </div>
+          </div>
+
+          <div className="field">
+            <label>이용권 만료일</label>
+            <input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
+          </div>
+
+          <button className="btn btn-dark" onClick={createCompany} disabled={saving}>
+            {saving ? '생성 중...' : '업체 계정 생성'}
+          </button>
         </div>
-      </header>
-      <div className="wrap">
-        <div className="notice">관리자 생성 API까지 붙이기 전 기본 관리 화면입니다. 먼저 Supabase SQL 실행 후 목록 확인에 사용하세요.</div>
-        <div className="layout">
-          <aside className="sidebar">
-            <div className="card section-card">
-              <h2>업체 생성</h2>
-              <p>실제 운영에선 서버 API로 Auth 사용자와 프로필을 함께 생성해야 합니다.</p>
-              <div className="field"><label>업체명</label><input value={form.company_name} onChange={(e) => setForm({ ...form, company_name: e.target.value })} /></div>
-              <div className="field"><label>발행 한도</label><input value={form.publish_limit} onChange={(e) => setForm({ ...form, publish_limit: e.target.value })} /></div>
-              <div className="field"><label>이미지 한도</label><input value={form.image_limit} onChange={(e) => setForm({ ...form, image_limit: e.target.value })} /></div>
-              <div className="field"><label>만료일</label><input type="date" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} /></div>
-              <button className="btn btn-dark" onClick={handleCreate} style={{ width:'100%' }}>업체 생성</button>
-              {message ? <div className="small" style={{ marginTop: 12 }}>{message}</div> : null}
+
+        <div className="card admin-table-card">
+          <h2>업체 목록</h2>
+
+          <div className="admin-table">
+            <div className="admin-head">
+              <span>업체명</span>
+              <span>아이디(전화번호)</span>
+              <span>발행</span>
+              <span>이미지</span>
+              <span>만료일</span>
+              <span>상태</span>
+              <span>관리</span>
             </div>
-          </aside>
-          <section className="content">
-            <div className="card section-card">
-              <h2>업체 목록</h2>
-              <p>업체명, 사용량, 만료일을 확인합니다.</p>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>업체명</th>
-                    <th>발행</th>
-                    <th>이미지</th>
-                    <th>만료일</th>
-                    <th>상태</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {companies.map((company) => (
-                    <tr key={company.id}>
-                      <td>{company.company_name}</td>
-                      <td>{company.publish_used} / {company.publish_limit}</td>
-                      <td>{company.image_used} / {company.image_limit}</td>
-                      <td>{company.expires_at}</td>
-                      <td>{company.is_active ? '활성' : '비활성'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
+
+            {companies.map((row) => (
+              <div className="admin-row" key={row.id}>
+                <span>{row.company_name}</span>
+                <span>{row.login_id || '-'}</span>
+                <span>
+                  {row.publish_used} / {row.publish_limit}
+                </span>
+                <span>
+                  {row.image_used} / {row.image_limit}
+                </span>
+                <span>{row.expires_at}</span>
+                <span>{row.is_active ? '활성' : '비활성'}</span>
+                <span>
+                  <button className="btn" onClick={() => toggleActive(row)}>
+                    {row.is_active ? '비활성화' : '활성화'}
+                  </button>
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </main>
