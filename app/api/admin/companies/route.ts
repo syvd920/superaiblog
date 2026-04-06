@@ -1,74 +1,76 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/server-auth';
-import { supabaseAdmin } from '@/lib/supabase-admin';
+import { createClient } from '@supabase/supabase-js';
 
-export async function GET() {
-  try {
-    await requireAdmin();
-
-    const { data, error } = await supabaseAdmin
-      .from('company_profiles')
-      .select('id, company_name, login_email, publish_limit, publish_used, image_limit, image_used, expires_at, is_active, plan_name')
-      .order('id', { ascending: false });
-
-    if (error) throw error;
-
-    return NextResponse.json({ companies: data || [] });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : '업체 목록 조회에 실패했습니다.' },
-      { status: 403 }
-    );
-  }
+function getAdminEmails() {
+  return (process.env.ADMIN_EMAILS || '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    await requireAdmin();
-    const body = await request.json();
+    const body = await req.json();
 
-    const companyName = String(body.companyName || '').trim();
-    const loginEmail = String(body.loginEmail || '').trim().toLowerCase();
-    const password = String(body.password || '').trim();
-    const publishLimit = Number(body.publishLimit || 0);
-    const imageLimit = Number(body.imageLimit || 0);
-    const expiresAt = String(body.expiresAt || '').trim();
-    const planName = String(body.planName || 'Basic').trim();
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const publishable = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
+    const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-    if (!companyName || !loginEmail || !password || !expiresAt) {
-      return NextResponse.json({ error: '필수값이 비어 있습니다.' }, { status: 400 });
+    const userSupabase = createClient(url, publishable, {
+      global: {
+        headers: {
+          Authorization: req.headers.get('Authorization') || '',
+        },
+      },
+    });
+
+    const {
+      data: { user },
+    } = await userSupabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json({ error: '로그인이 필요합니다.' }, { status: 401 });
     }
 
-    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
-      email: loginEmail,
-      password,
+    const adminEmails = getAdminEmails();
+    if (!adminEmails.includes(user.email || '')) {
+      return NextResponse.json({ error: '관리자만 접근 가능합니다.' }, { status: 403 });
+    }
+
+    const adminSupabase = createClient(url, serviceRole);
+
+    const authResult = await adminSupabase.auth.admin.createUser({
+      email: body.email,
+      password: body.password,
       email_confirm: true,
     });
 
-    if (authError) throw authError;
+    if (authResult.error || !authResult.data.user) {
+      return NextResponse.json(
+        { error: authResult.error?.message || 'Auth 유저 생성 실패' },
+        { status: 400 }
+      );
+    }
 
-    const userId = authData.user.id;
-
-    const { error: insertError } = await supabaseAdmin.from('company_profiles').insert({
-      user_id: userId,
-      company_name: companyName,
-      login_email: loginEmail,
-      publish_limit: publishLimit,
+    const insertResult = await adminSupabase.from('company_profiles').insert({
+      user_id: authResult.data.user.id,
+      company_name: body.company_name,
+      login_id: body.login_id,
+      publish_limit: body.publish_limit,
       publish_used: 0,
-      image_limit: imageLimit,
+      image_limit: body.image_limit,
       image_used: 0,
-      expires_at: expiresAt,
+      expires_at: body.expires_at,
       is_active: true,
-      plan_name: planName,
     });
 
-    if (insertError) throw insertError;
+    if (insertResult.error) {
+      return NextResponse.json({ error: insertResult.error.message }, { status: 400 });
+    }
 
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : '업체 생성에 실패했습니다.' },
-      { status: 500 }
-    );
+    console.error(error);
+    return NextResponse.json({ error: '서버 오류' }, { status: 500 });
   }
 }
