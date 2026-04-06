@@ -4,8 +4,13 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
+function phoneToEmail(value: string) {
+  const normalized = value.replace(/[^0-9]/g, '');
+  return `${normalized}@admin.local`;
+}
+
 export default function LoginPage() {
-  const [email, setEmail] = useState('');
+  const [loginId, setLoginId] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -14,11 +19,18 @@ export default function LoginPage() {
   const handleLogin = async () => {
     setLoading(true);
     setError('');
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+
+    const email = phoneToEmail(loginId);
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
     setLoading(false);
 
     if (error) {
-      setError(error.message);
+      setError('아이디 또는 비밀번호가 올바르지 않습니다.');
       return;
     }
 
@@ -26,25 +38,46 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="login-wrap">
-      <div className="card login-card">
-        <h1 className="login-title">업체 로그인</h1>
-        <p className="login-sub">관리자가 발급한 계정으로 로그인하세요.</p>
+    <main className="page-shell" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '80px 24px' }}>
+      <div className="card" style={{ width: '100%', maxWidth: 460, padding: 32 }}>
+        <h1 style={{ margin: 0, fontSize: 32, fontWeight: 800 }}>업체 로그인</h1>
+        <p style={{ marginTop: 10, color: '#94a3b8', lineHeight: 1.7 }}>
+          관리자가 발급한 전화번호 아이디와 비밀번호로 로그인하세요.
+        </p>
 
-        <div className="field">
+        <div className="field" style={{ marginTop: 24 }}>
           <label>아이디</label>
-          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="이메일 형식 아이디" />
+          <input
+            value={loginId}
+            onChange={(e) => setLoginId(e.target.value)}
+            placeholder="전화번호 입력 (예: 01012345678)"
+          />
         </div>
+
         <div className="field">
           <label>비밀번호</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="비밀번호" />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="비밀번호"
+          />
         </div>
 
-        <button className="btn btn-dark" onClick={handleLogin} disabled={loading} style={{ width:'100%', marginTop:8 }}>
+        <button
+          className="btn btn-dark"
+          onClick={handleLogin}
+          disabled={loading}
+          style={{ width: '100%', marginTop: 12 }}
+        >
           {loading ? '로그인 중...' : '로그인'}
         </button>
 
-        {error ? <div className="error">{error}</div> : null}
+        {error ? (
+          <div style={{ marginTop: 14, color: '#dc2626', fontWeight: 600 }}>
+            {error}
+          </div>
+        ) : null}
       </div>
     </main>
   );
